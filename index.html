@@ -16,6 +16,8 @@ nav{display:flex;gap:8px;overflow-x:auto;padding:12px;background:white}
 button{border:0;border-radius:12px;padding:13px;cursor:pointer;font-weight:bold}
 nav button{background:#eee5da;white-space:nowrap}
 nav button.active,.primary{background:#8a4b29;color:white}
+.payrow{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0;padding:10px;background:#f7f3ed;border-radius:12px}
+.payrow .wide{grid-column:1/-1}.payrow label{font-size:13px}.payrow button{background:#ead4bf}.note{background:#fff3d8;padding:12px;border-radius:10px;font-size:13px}.ok{color:#217045}.error{color:#b42318}.mini{font-size:13px}.paybox{border-top:1px solid #eee;margin-top:12px;padding-top:12px}
 main{padding:16px;max-width:1250px;margin:auto}
 h2{font-size:23px}
 .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
@@ -53,6 +55,7 @@ td,th{padding:10px 5px;border-bottom:1px solid #eee;text-align:left}
 <button onclick="tab('inventario',this)">📦 Inventario</button>
 <button onclick="tab('historial',this)">🧾 Tickets</button>
 <button onclick="tab('reportes',this)">📊 Reportes</button>
+<button onclick="tab('configuracion',this)">⚙️ Tasas</button>
 </nav>
 <main>
 <section id="ventas">
@@ -66,15 +69,16 @@ td,th{padding:10px 5px;border-bottom:1px solid #eee;text-align:left}
 <h2>🛒 Venta actual</h2>
 <div id="carrito"></div>
 <div class="line"><span>Total</span><span class="total" id="total">$0.00</span></div>
-<label>Método de pago</label>
-<select id="metodo">
-<option>Efectivo</option>
-<option>Tarjeta</option>
-<option>Transferencia</option>
-<option>Pago móvil</option>
-<option>Otro</option>
-</select>
-<button class="primary full" onclick="cobrar()">💳 Cobrar venta</button>
+<div class="paybox"><h3>💳 Pagos mixtos</h3>
+<p class="muted">Selecciona los métodos, monedas e importes recibidos. Las conversiones usan las tasas verificadas en ⚙️ Tasas.</p>
+<div id="pagos"></div>
+<button class="full" onclick="agregarPago()">＋ Agregar método de pago</button>
+<div class="line"><span>Pagado (equiv. USD)</span><strong id="pagado">$0.00</strong></div>
+<div class="line"><span id="saldoLabel">Pendiente</span><strong id="saldo">$0.00</strong></div>
+<div id="vueltoPanel" class="hide"><label>Dar vuelto en</label><select id="monedaVuelto" onchange="renderPagos()"><option value="USD">Dólares (USD)</option><option value="VES">Bolívares (Bs)</option></select><div class="line"><span>Vuelto</span><strong id="vueltoValor">$0.00</strong></div></div>
+<div id="avisoPago" class="mini"></div>
+<button class="primary full" onclick="cobrar()">💳 Confirmar cobro</button>
+</div>
 <button class="full" onclick="vaciar()">Cancelar carrito</button>
 </div>
 </div>
@@ -104,7 +108,17 @@ td,th{padding:10px 5px;border-bottom:1px solid #eee;text-align:left}
 <div class="card"><p>Total vendido</p><div class="stat" id="totalVentas">$0</div></div>
 </div>
 <button class="primary full" onclick="exportar()">Exportar ventas CSV</button>
+<button class="full" onclick="exportarRespaldo()">💾 Descargar respaldo completo (JSON)</button>
 </section>
+<section id="configuracion" class="hide"><h2>⚙️ Tasas de cambio</h2><div class="card">
+<p class="note">Ingresa únicamente tasas oficiales verificadas. Esta versión no consulta automáticamente el BCV. Comprueba la tasa y su fecha en <a href="https://www.bcv.org.ve/" target="_blank" rel="noopener">bcv.org.ve</a> antes de cobrar.</p>
+<label>BCV: bolívares (Bs) por 1 USD</label><input id="tasaBCV" type="number" min="0" step="any" inputmode="decimal" placeholder="Ej.: tasa oficial verificada">
+<label>Fecha de vigencia de la tasa BCV</label><input id="fechaBCV" type="date">
+<label>Pesos colombianos (COP) por 1 USD</label><input id="tasaCOP" type="number" min="0" step="any" inputmode="decimal" placeholder="Tasa COP verificada">
+<label>Fecha de referencia COP</label><input id="fechaCOP" type="date">
+<button class="primary full" onclick="guardarTasas()">Guardar tasas verificadas</button>
+<p class="muted">La tasa COP es configurable; no es una tasa publicada por el BCV. Cada ticket guarda las tasas usadas.</p>
+</div></section>
 </main>
 <script>
 const clave="panaderia_pos_demo_v1";
@@ -122,6 +136,28 @@ if(!datos||!Array.isArray(datos.productos)||!Array.isArray(datos.ventas)){
 datos={productos:inicial,ventas:[]};
 }
 let carrito=[];
+const metodos={"Efectivo Bs":"VES","Efectivo USD":"USD","Efectivo pesos":"COP","Bancolombia":"COP","Binance / Zelle":"USD","Punto de venta":"VES","Biopago":"VES","Pago móvil / Transferencia":"VES","Cashea":"USD"};
+const tasasKey="panaderia_pos_tasas_v1";
+let tasas={bcv:0,fechaBCV:"",cop:0,fechaCOP:""};
+try{const t=JSON.parse(localStorage.getItem(tasasKey));if(t&&typeof t==="object")tasas={...tasas,...t}}catch(e){}
+let pagos=[{metodo:"Efectivo USD",importe:""}];
+const redondear=n=>Math.round((n+Number.EPSILON)*100)/100;
+const formato=(n,moneda)=>new Intl.NumberFormat("es-VE",{minimumFractionDigits:2,maximumFractionDigits:2}).format(n)+" "+(moneda==="VES"?"Bs":moneda);
+function monedaDe(m){return metodos[m]||"USD"}
+function equivalente(importe,moneda){if(moneda==="VES")return tasas.bcv>0?importe/tasas.bcv:NaN;if(moneda==="COP")return tasas.cop>0?importe/tasas.cop:NaN;return importe}
+function tasaValida(moneda){return moneda==="USD"||(moneda==="VES"?tasas.bcv>0&&!!tasas.fechaBCV:tasas.cop>0&&!!tasas.fechaCOP)}
+function agregarPago(){pagos.push({metodo:"Efectivo USD",importe:""});renderPagos()}
+function eliminarPago(i){if(pagos.length===1)return;pagos.splice(i,1);renderPagos()}
+function cambiarMetodo(i,v){pagos[i].metodo=v;pagos[i].importe="";renderPagos()}
+function cambiarImporte(i,v){pagos[i].importe=v;actualizarSaldos()}
+function totalCarrito(){return redondear(carrito.reduce((s,x)=>{const p=datos.productos.find(y=>y.id===x.id);return s+(p?p.p*x.c:0)},0))}
+function calcularPago(){let suma=0,errores=[];for(const p of pagos){const n=Number(p.importe),m=monedaDe(p.metodo);if(p.importe===""||!Number.isFinite(n)||n<=0){errores.push("Introduce un importe válido en cada pago.");continue}if(!tasaValida(m)){errores.push("Configura y verifica la tasa de "+m+" en ⚙️ Tasas.");continue}suma+=equivalente(n,m)}return {pagado:redondear(suma),errores:[...new Set(errores)],diferencia:redondear(suma-totalCarrito())}}
+function renderPagos(){const cont=$("pagos");cont.innerHTML="";pagos.forEach((p,i)=>{const row=document.createElement("div");row.className="payrow";const sel=document.createElement("select");Object.keys(metodos).forEach(m=>{const op=document.createElement("option");op.value=m;op.textContent=m;sel.append(op)});sel.value=p.metodo;sel.onchange=()=>cambiarMetodo(i,sel.value);const inp=document.createElement("input");inp.type="number";inp.min="0";inp.step="any";inp.inputMode="decimal";inp.placeholder="Importe en "+monedaDe(p.metodo);inp.value=p.importe;inp.oninput=()=>cambiarImporte(i,inp.value);const lbl=document.createElement("label");lbl.className="wide";lbl.textContent="Pago "+(i+1)+" — "+monedaDe(p.metodo);const del=document.createElement("button");del.textContent="Quitar";del.onclick=()=>eliminarPago(i);row.append(lbl,sel,inp,del);cont.append(row)});actualizarSaldos()}
+function actualizarSaldos(){const x=calcularPago();$("pagado").textContent=dinero(x.pagado);$("saldoLabel").textContent=x.diferencia>0?"Excedente para vuelto":"Pendiente";$("saldo").textContent=dinero(Math.abs(x.diferencia));const hayExcedente=x.diferencia>0;$("vueltoPanel").classList.toggle("hide",!hayExcedente);if(hayExcedente){const mv=$("monedaVuelto").value;$("vueltoValor").textContent=mv==="VES"&&tasas.bcv>0?formato(redondear(x.diferencia*tasas.bcv),"VES"):mv==="VES"?"Configura tasa BCV":dinero(x.diferencia)}const e=[...x.errores];if(hayExcedente&&!pagos.some(p=>p.metodo.startsWith("Efectivo")))e.push("El excedente solo se admite si se recibió efectivo.");if(hayExcedente&&$("monedaVuelto").value==="VES"&&!tasaValida("VES"))e.push("Verifica la tasa BCV para el vuelto.");$("avisoPago").textContent=e.join(" ");$("avisoPago").className="mini "+(e.length?"error":"ok")}
+function guardarTasas(){const b=Number($("tasaBCV").value),c=Number($("tasaCOP").value),fb=$("fechaBCV").value,fc=$("fechaCOP").value;if((b>0&&!fb)||(c>0&&!fc)||b<0||c<0||!Number.isFinite(b)||!Number.isFinite(c)){alert("Revisa las tasas y sus fechas de vigencia.");return}tasas={bcv:b,fechaBCV:fb,cop:c,fechaCOP:fc};localStorage.setItem(tasasKey,JSON.stringify(tasas));renderPagos();alert("Tasas guardadas. Verifica siempre su vigencia antes de cobrar.")}
+function cargarTasas(){ $("tasaBCV").value=tasas.bcv||"";$("fechaBCV").value=tasas.fechaBCV;$("tasaCOP").value=tasas.cop||"";$("fechaCOP").value=tasas.fechaCOP }
+function exportarRespaldo(){descargar("respaldo-panaderia-pos.json",JSON.stringify({datos,tasas,exportado:new Date().toISOString()},null,2),"application/json")}
+function descargar(nombre,contenido,tipo){const blob=new Blob([contenido],{type:tipo});const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=nombre;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500)}
 const $=id=>document.getElementById(id);
 const dinero=n=>"$"+Number(n).toFixed(2);
 function guardar(){localStorage.setItem(clave,JSON.stringify(datos))}
@@ -174,22 +210,27 @@ let minus=document.createElement("button");minus.textContent="−";minus.onclick
 let plus=document.createElement("button");plus.textContent="+";plus.onclick=()=>cambiar(x.id,1);
 row.append(name,minus,plus);cont.append(row);
 });
-$("total").textContent=dinero(total);
+$("total").textContent=dinero(total);actualizarSaldos();
 }
 function vaciar(){carrito=[];renderCarrito()}
 function cobrar(){
 if(!carrito.length){alert("Agrega productos primero");return}
-let items=carrito.map(x=>{
-let p=datos.productos.find(y=>y.id===x.id);
-return {id:x.id,n:p.n,p:p.p,c:x.c};
-});
-let total=items.reduce((a,x)=>a+x.p*x.c,0);
-if(!confirm("¿Confirmar cobro de "+dinero(total)+"?"))return;
-items.forEach(x=>datos.productos.find(p=>p.id===x.id).s-=x.c);
-let venta={id:Date.now(),fecha:new Date().toISOString(),items,total,metodo:$("metodo").value};
-datos.ventas.push(venta);
-guardar();vaciar();actualizar();
-alert("Venta registrada. Ticket #"+venta.id);
+const items=carrito.map(x=>{const p=datos.productos.find(y=>y.id===x.id);return p?{id:x.id,n:p.n,p:p.p,c:x.c}:null});
+if(items.some(x=>!x)){alert("Hay productos no disponibles. Revisa el carrito.");return}
+if(items.some(x=>datos.productos.find(p=>p.id===x.id).s<x.c)){alert("Inventario insuficiente. Revisa el carrito.");return}
+const total=redondear(items.reduce((a,x)=>a+x.p*x.c,0)),calc=calcularPago();
+if(calc.errores.length){alert(calc.errores.join("\n"));return}
+if(calc.diferencia<0){alert("Faltan "+dinero(-calc.diferencia)+" por pagar.");return}
+if(calc.diferencia>0&&!pagos.some(p=>p.metodo.startsWith("Efectivo"))){alert("Solo se admite vuelto cuando hay efectivo recibido.");return}
+const monedaVuelto=calc.diferencia>0?$("monedaVuelto").value:null;
+if(monedaVuelto==="VES"&&!tasaValida("VES")){alert("Configura la tasa BCV verificada para calcular el vuelto.");return}
+const vuelto=calc.diferencia>0?{moneda:monedaVuelto,importe:monedaVuelto==="VES"?redondear(calc.diferencia*tasas.bcv):calc.diferencia,usd:calc.diferencia}:null;
+const detalle=pagos.map(p=>({metodo:p.metodo,moneda:monedaDe(p.metodo),importe:Number(p.importe),equivalenteUSD:redondear(equivalente(Number(p.importe),monedaDe(p.metodo)))}));
+const resumen=detalle.map(p=>p.metodo+": "+formato(p.importe,p.moneda)).join("\n");
+if(!confirm("¿Confirmar venta por "+dinero(total)+"?\n"+resumen+(vuelto?"\nVuelto: "+formato(vuelto.importe,vuelto.moneda):"")+"\n\nConfirma primero los pagos externos (Cashea, Zelle, etc.)."))return;
+const venta={id:Date.now(),fecha:new Date().toISOString(),items,total,metodo:detalle.map(p=>p.metodo).join(" + "),pagos:detalle,vuelto,tasas:{...tasas}};
+try{items.forEach(x=>datos.productos.find(p=>p.id===x.id).s-=x.c);datos.ventas.push(venta);guardar()}catch(e){items.forEach(x=>datos.productos.find(p=>p.id===x.id).s+=x.c);datos.ventas.pop();alert("No se pudo guardar la venta. Revisa el almacenamiento del navegador.");return}
+vaciar();pagos=[{metodo:"Efectivo USD",importe:""}];renderPagos();actualizar();alert("Venta registrada. Ticket #"+venta.id);
 }
 function agregarProducto(){
 let n=$("nombre").value.trim(),p=Number($("precio").value),s=Number($("stock").value);
@@ -220,10 +261,13 @@ let cont=$("tickets");cont.innerHTML="";
 [...datos.ventas].reverse().forEach(v=>{
 let d=document.createElement("div");d.className="card";
 let h=document.createElement("h3");h.textContent="Ticket #"+v.id;
-let info=document.createElement("p");info.textContent=new Date(v.fecha).toLocaleString()+" — "+v.metodo;
+let info=document.createElement("p");info.textContent=new Date(v.fecha).toLocaleString()+" — "+(v.metodo||"Sin especificar");
+let detalle=document.createElement("p");detalle.className="mini";detalle.textContent=Array.isArray(v.pagos)?v.pagos.map(p=>p.metodo+": "+formato(p.importe,p.moneda)+" ("+dinero(p.equivalenteUSD)+")").join(" | "):"Registro anterior";
+let cambio=document.createElement("p");cambio.className="mini";cambio.textContent=v.vuelto?"Vuelto: "+formato(v.vuelto.importe,v.vuelto.moneda):"";
+let tasa=document.createElement("p");tasa.className="muted";tasa.textContent=v.tasas?"BCV: "+(v.tasas.bcv||"—")+" Bs/USD ("+(v.tasas.fechaBCV||"sin fecha")+") | COP: "+(v.tasas.cop||"—")+" ("+(v.tasas.fechaCOP||"sin fecha")+")":"";
 let items=document.createElement("p");items.textContent=v.items.map(x=>x.n+" × "+x.c).join(", ");
 let total=document.createElement("strong");total.textContent=dinero(v.total);
-d.append(h,info,items,total);cont.append(d);
+d.append(h,info,items,detalle,cambio,tasa,total);cont.append(d);
 });
 }
 function reportes(){
@@ -231,14 +275,14 @@ $("numVentas").textContent=datos.ventas.length;
 $("totalVentas").textContent=dinero(datos.ventas.reduce((a,v)=>a+v.total,0));
 }
 function exportar(){
-let rows=[["Ticket","Fecha","Metodo","Total"],...datos.ventas.map(v=>[v.id,v.fecha,v.metodo,v.total])];
+let rows=[["Ticket","Fecha","Metodo","Total USD","Pagos","Vuelto","Tasa BCV","Fecha BCV","Tasa COP"],...datos.ventas.map(v=>[v.id,v.fecha,v.metodo,v.total,Array.isArray(v.pagos)?v.pagos.map(p=>p.metodo+" "+p.importe+" "+p.moneda).join("; "):"",v.vuelto?formato(v.vuelto.importe,v.vuelto.moneda):"",v.tasas?.bcv||"",v.tasas?.fechaBCV||"",v.tasas?.cop||""])];
 let csv=rows.map(r=>r.map(x=>'"'+String(x).replace(/"/g,'""')+'"').join(",")).join("\r\n");
 let blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});
 let a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="ventas-panaderia.csv";a.click();
 setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
 function actualizar(){renderProductos();renderCarrito();inventario();tickets();reportes()}
-actualizar();
+cargarTasas();renderPagos();actualizar();
 </script>
 </body>
 </html>
