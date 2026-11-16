@@ -1,26 +1,244 @@
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#653b27">
 <title>Panadería POS</title>
 <style>
-body{font-family:Arial;background:#f8f5ef;margin:0;padding:20px}
-h1{color:#7b421f}
-.card{background:white;padding:20px;border-radius:12px;margin:12px 0}
-button{background:#7b421f;color:white;border:0;padding:14px;border-radius:8px}
+*{box-sizing:border-box}
+body{margin:0;background:#f7f3ed;color:#30251f;font-family:Arial,sans-serif}
+header{background:#653b27;color:white;padding:18px;display:flex;justify-content:space-between;align-items:center}
+header h1{font-size:22px;margin:0}
+header small{color:#ead4bf}
+nav{display:flex;gap:8px;overflow-x:auto;padding:12px;background:white}
+button{border:0;border-radius:12px;padding:13px;cursor:pointer;font-weight:bold}
+nav button{background:#eee5da;white-space:nowrap}
+nav button.active,.primary{background:#8a4b29;color:white}
+main{padding:16px;max-width:1250px;margin:auto}
+h2{font-size:23px}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.card{background:white;border-radius:17px;padding:16px;box-shadow:0 3px 12px #0000000a}
+.product{cursor:pointer;text-align:center}
+.product .emoji{font-size:40px;margin:12px}
+.price{color:#8a4b29;font-weight:bold}
+.layout{display:grid;gap:16px}
+input,select{padding:13px;border:1px solid #ddd;border-radius:10px;width:100%;font-size:16px;margin:5px 0}
+.full{width:100%;margin-top:10px}
+.line{display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid #eee;padding:12px 0}
+.line button{padding:8px;background:#f0e6dc}
+.total{font-size:25px;font-weight:bold;color:#653b27}
+.muted{color:#777;font-size:13px}
+.hide{display:none}
+.stat{font-size:26px;font-weight:bold;color:#8a4b29}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td,th{padding:10px 5px;border-bottom:1px solid #eee;text-align:left}
+@media(min-width:800px){
+.layout{grid-template-columns:1fr 350px}
+.grid{grid-template-columns:repeat(3,1fr)}
+}
 </style>
 </head>
 <body>
+<header>
+<div>
 <h1>🥐 Panadería POS</h1>
-<p>Bienvenido al sistema de tu panadería</p>
-<div class="card">
-<h2>Ventas</h2>
-<button onclick="alert('Módulo de ventas en preparación')">Abrir ventas</button>
+<small>Sistema de ventas</small>
 </div>
-<div class="card"><h2>Inventario</h2></div>
-<div class="card"><h2>Caja y movimientos</h2></div>
-<div class="card"><h2>Barra y producción</h2></div>
-<div class="card"><h2>Reportes</h2></div>
+<span>● Demo</span>
+</header>
+<nav>
+<button class="active" onclick="tab('ventas',this)">🛒 Ventas</button>
+<button onclick="tab('inventario',this)">📦 Inventario</button>
+<button onclick="tab('historial',this)">🧾 Tickets</button>
+<button onclick="tab('reportes',this)">📊 Reportes</button>
+</nav>
+<main>
+<section id="ventas">
+<h2>Punto de venta</h2>
+<div class="layout">
+<div>
+<input id="buscar" placeholder="🔍 Buscar producto..." oninput="renderProductos()">
+<div id="productos" class="grid"></div>
+</div>
+<div class="card">
+<h2>🛒 Venta actual</h2>
+<div id="carrito"></div>
+<div class="line"><span>Total</span><span class="total" id="total">$0.00</span></div>
+<label>Método de pago</label>
+<select id="metodo">
+<option>Efectivo</option>
+<option>Tarjeta</option>
+<option>Transferencia</option>
+<option>Pago móvil</option>
+<option>Otro</option>
+</select>
+<button class="primary full" onclick="cobrar()">💳 Cobrar venta</button>
+<button class="full" onclick="vaciar()">Cancelar carrito</button>
+</div>
+</div>
+</section>
+
+<section id="inventario" class="hide">
+<h2>📦 Inventario</h2>
+<div class="card">
+<h3>Agregar producto</h3>
+<input id="nombre" placeholder="Nombre del producto">
+<input id="precio" type="number" min="0.01" step="0.01" placeholder="Precio">
+<input id="stock" type="number" min="0" step="1" placeholder="Cantidad disponible">
+<button class="primary full" onclick="agregarProducto()">Guardar producto</button>
+</div>
+<div id="listaInventario"></div>
+</section>
+
+<section id="historial" class="hide">
+<h2>🧾 Historial de tickets</h2>
+<div id="tickets"></div>
+</section>
+
+<section id="reportes" class="hide">
+<h2>📊 Reportes de ventas</h2>
+<div class="grid">
+<div class="card"><p>Ventas registradas</p><div class="stat" id="numVentas">0</div></div>
+<div class="card"><p>Total vendido</p><div class="stat" id="totalVentas">$0</div></div>
+</div>
+<button class="primary full" onclick="exportar()">Exportar ventas CSV</button>
+</section>
+</main>
+<script>
+const clave="panaderia_pos_demo_v1";
+const inicial=[
+{id:1,n:"Pan francés",p:1.5,s:40,e:"🥖"},
+{id:2,n:"Croissant",p:2.5,s:30,e:"🥐"},
+{id:3,n:"Pan dulce",p:2,s:25,e:"🍞"},
+{id:4,n:"Pastel",p:12,s:10,e:"🎂"},
+{id:5,n:"Café",p:2,s:50,e:"☕"},
+{id:6,n:"Galleta",p:1,s:60,e:"🍪"}
+];
+let datos;
+try{datos=JSON.parse(localStorage.getItem(clave))}catch(e){}
+if(!datos||!Array.isArray(datos.productos)||!Array.isArray(datos.ventas)){
+datos={productos:inicial,ventas:[]};
+}
+let carrito=[];
+const $=id=>document.getElementById(id);
+const dinero=n=>"$"+Number(n).toFixed(2);
+function guardar(){localStorage.setItem(clave,JSON.stringify(datos))}
+function tab(id,btn){
+document.querySelectorAll("main section").forEach(x=>x.classList.add("hide"));
+$(id).classList.remove("hide");
+document.querySelectorAll("nav button").forEach(x=>x.classList.remove("active"));
+btn.classList.add("active");
+actualizar();
+}
+function renderProductos(){
+let q=$("buscar").value.toLowerCase();
+let cont=$("productos");cont.innerHTML="";
+datos.productos.filter(p=>p.n.toLowerCase().includes(q)).forEach(p=>{
+let d=document.createElement("div");d.className="card product";
+let em=document.createElement("div");em.className="emoji";em.textContent=p.e||"🥯";
+let name=document.createElement("h3");name.textContent=p.n;
+let price=document.createElement("p");price.className="price";price.textContent=dinero(p.p);
+let stock=document.createElement("p");stock.className="muted";stock.textContent="Disponibles: "+p.s;
+d.append(em,name,price,stock);
+d.onclick=()=>sumar(p.id);cont.append(d);
+});
+}
+function sumar(id){
+let p=datos.productos.find(x=>x.id===id);
+let item=carrito.find(x=>x.id===id);
+if(!p||p.s<=(item?item.c:0)){alert("No hay suficiente inventario");return}
+if(item)item.c++;else carrito.push({id,c:1});
+renderCarrito();
+}
+function cambiar(id,n){
+let item=carrito.find(x=>x.id===id);
+if(!item)return;
+let p=datos.productos.find(x=>x.id===id);
+if(n>0&&item.c>=p.s)return;
+item.c+=n;
+carrito=carrito.filter(x=>x.c>0);
+renderCarrito();
+}
+function renderCarrito(){
+let cont=$("carrito");cont.innerHTML="";
+let total=0;
+carrito.forEach(x=>{
+let p=datos.productos.find(y=>y.id===x.id);
+if(!p)return;
+total+=p.p*x.c;
+let row=document.createElement("div");row.className="line";
+let name=document.createElement("span");name.textContent=p.n+" × "+x.c;
+let minus=document.createElement("button");minus.textContent="−";minus.onclick=()=>cambiar(x.id,-1);
+let plus=document.createElement("button");plus.textContent="+";plus.onclick=()=>cambiar(x.id,1);
+row.append(name,minus,plus);cont.append(row);
+});
+$("total").textContent=dinero(total);
+}
+function vaciar(){carrito=[];renderCarrito()}
+function cobrar(){
+if(!carrito.length){alert("Agrega productos primero");return}
+let items=carrito.map(x=>{
+let p=datos.productos.find(y=>y.id===x.id);
+return {id:x.id,n:p.n,p:p.p,c:x.c};
+});
+let total=items.reduce((a,x)=>a+x.p*x.c,0);
+if(!confirm("¿Confirmar cobro de "+dinero(total)+"?"))return;
+items.forEach(x=>datos.productos.find(p=>p.id===x.id).s-=x.c);
+let venta={id:Date.now(),fecha:new Date().toISOString(),items,total,metodo:$("metodo").value};
+datos.ventas.push(venta);
+guardar();vaciar();actualizar();
+alert("Venta registrada. Ticket #"+venta.id);
+}
+function agregarProducto(){
+let n=$("nombre").value.trim(),p=Number($("precio").value),s=Number($("stock").value);
+if(!n||!Number.isFinite(p)||p<=0||!Number.isInteger(s)||s<0){alert("Revisa nombre, precio y cantidad");return}
+datos.productos.push({id:Date.now(),n,p,s,e:"🥯"});
+guardar();
+$("nombre").value=$("precio").value=$("stock").value="";
+actualizar();
+}
+function inventario(){
+let cont=$("listaInventario");cont.innerHTML="";
+datos.productos.forEach(p=>{
+let row=document.createElement("div");row.className="card line";
+let label=document.createElement("span");label.textContent=p.n+" — "+dinero(p.p)+" — Stock: "+p.s;
+let btn=document.createElement("button");btn.textContent="Ajustar";
+btn.onclick=()=>{
+let v=prompt("Nuevo stock de "+p.n,p.s);
+if(v===null)return;
+let s=Number(v);
+if(!Number.isInteger(s)||s<0){alert("Cantidad inválida");return}
+p.s=s;guardar();actualizar();
+};
+row.append(label,btn);cont.append(row);
+});
+}
+function tickets(){
+let cont=$("tickets");cont.innerHTML="";
+[...datos.ventas].reverse().forEach(v=>{
+let d=document.createElement("div");d.className="card";
+let h=document.createElement("h3");h.textContent="Ticket #"+v.id;
+let info=document.createElement("p");info.textContent=new Date(v.fecha).toLocaleString()+" — "+v.metodo;
+let items=document.createElement("p");items.textContent=v.items.map(x=>x.n+" × "+x.c).join(", ");
+let total=document.createElement("strong");total.textContent=dinero(v.total);
+d.append(h,info,items,total);cont.append(d);
+});
+}
+function reportes(){
+$("numVentas").textContent=datos.ventas.length;
+$("totalVentas").textContent=dinero(datos.ventas.reduce((a,v)=>a+v.total,0));
+}
+function exportar(){
+let rows=[["Ticket","Fecha","Metodo","Total"],...datos.ventas.map(v=>[v.id,v.fecha,v.metodo,v.total])];
+let csv=rows.map(r=>r.map(x=>'"'+String(x).replace(/"/g,'""')+'"').join(",")).join("\r\n");
+let blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});
+let a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="ventas-panaderia.csv";a.click();
+setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+function actualizar(){renderProductos();renderCarrito();inventario();tickets();reportes()}
+actualizar();
+</script>
 </body>
 </html>
